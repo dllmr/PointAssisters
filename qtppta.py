@@ -342,6 +342,7 @@ class PowerPointAnalyzerGUI(QMainWindow):
         if filename:
             self.file_entry.setText(filename)
             self.results_text.clear()
+            self.status_bar.clearMessage()
 
     def analyze(self):
         file_path = self.file_entry.text()
