@@ -40,4 +40,4 @@ uv run qtppta.py presentation.pptx
 
 ## License
 
-[MIT](https://choosealicense.com/licenses/mit/)
+[GNU GPLv3](https://choosealicense.com/licenses/gpl-3.0/)
