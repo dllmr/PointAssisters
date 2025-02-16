@@ -32,10 +32,10 @@ Command line tool:
 uv run ppta.py presentation.pptx
 ```
 
-GUI version:
+GUI version - file to be chosen via UI:
 
 ```bash
-uv run qtppta.py presentation.pptx
+uv run qtppta.py
 ```
 
 ## License
