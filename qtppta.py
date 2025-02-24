@@ -4,7 +4,7 @@
 #     "markdown",
 #     "matplotlib",
 #     "python-pptx",
-#     "PyQt6",
+#     "PySide6",
 # ]
 # ///
 
@@ -17,7 +17,7 @@ from pathlib import Path
 from pptx import Presentation
 from pptx.shapes.base import BaseShape
 from pptx.text.text import _Paragraph
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QPushButton, QFileDialog, QLineEdit, 
                             QTextEdit, QCheckBox, QGroupBox, QStatusBar)
 from typing import Dict, List, Set, Tuple
