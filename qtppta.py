@@ -13,6 +13,7 @@ import logging
 import markdown
 import sys
 from collections import defaultdict
+from matplotlib import font_manager as fm
 from pathlib import Path
 from pptx import Presentation
 from pptx.shapes.base import BaseShape
@@ -67,13 +68,100 @@ def find_hidden_slides(pptx_path: str) -> List[int]:
             
     return hidden_slides
 
+def count_words_in_shape(shape: BaseShape) -> int:
+    """Count the words in a PowerPoint shape."""
+    word_count = 0
+    
+    try:
+        # Handle text frames
+        if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
+            # Count words in text frame paragraphs
+            for paragraph in shape.text_frame.paragraphs:
+                if paragraph.text.strip():
+                    word_count += len(paragraph.text.split())
+                
+        # Handle tables
+        if hasattr(shape, 'has_table') and shape.has_table:
+            for row in shape.table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.text_frame.paragraphs:
+                        if paragraph.text.strip():
+                            word_count += len(paragraph.text.split())
+                    
+    except Exception as e:
+        logger.debug(f"Error counting words in shape: {str(e)}")
+        
+    return word_count
+
+def analyze_presentation_statistics(pptx_path: str) -> Dict[str, Any]:
+    """Analyze general statistics about the presentation."""
+    prs = Presentation(pptx_path)
+    stats = {
+        "total_slides": len(prs.slides),
+        "hidden_slides": [],
+        "total_words": 0,
+        "slide_word_counts": {},
+        "max_words_slide": 0,
+        "max_words_count": 0
+    }
+    
+    # Find hidden slides and count words per slide
+    for slide_num, slide in enumerate(prs.slides, start=1):
+        try:
+            # Check if slide is hidden
+            if hasattr(slide, '_element') and slide._element.get('show') == '0':
+                stats["hidden_slides"].append(slide_num)
+            
+            # Count words on this slide
+            slide_word_count = 0
+            for shape in slide.shapes:
+                slide_word_count += count_words_in_shape(shape)
+            
+            stats["slide_word_counts"][slide_num] = slide_word_count
+            stats["total_words"] += slide_word_count
+            
+            # Track slide with most words
+            if slide_word_count > stats["max_words_count"]:
+                stats["max_words_count"] = slide_word_count
+                stats["max_words_slide"] = slide_num
+            
+        except Exception as e:
+            logger.warning(f"Error analyzing slide {slide_num}: {e}")
+    
+    return stats
+
+def generate_presentation_summary(pptx_path: str) -> str:
+    """Generate a summary section with general presentation statistics."""
+    stats = analyze_presentation_statistics(pptx_path)
+    
+    result = "## Presentation Summary\n"
+    
+    # Basic stats
+    result += f"Total slides: {stats['total_slides']}<br />\n"
+    
+    # Hidden slides count
+    hidden_count = len(stats["hidden_slides"])
+    if hidden_count > 0:
+        result += f"Hidden slides: {hidden_count} ({', '.join(str(num) for num in sorted(stats['hidden_slides']))})<br />\n"
+    else:
+        result += "Hidden slides: 0<br />\n"
+    
+    # Word counts
+    result += f"Total words: {stats['total_words']}<br />\n"
+    
+    if stats["max_words_count"] > 0:
+        result += f"Slide with most words: {stats['max_words_slide']} ({stats['max_words_count']} words)<br />\n"
+    
+    result += "***\n"
+    return result
+
 def generate_hidden_slides_report(pptx_path: str) -> str:
     hidden_slides = find_hidden_slides(pptx_path)
     
     result = ""
 
     result += "## Hidden Slides\n"
-        
+    
     if hidden_slides:
         result += "Hidden slides: " + (", ".join(str(num) for num in sorted(hidden_slides))) + "\n"
     else:
@@ -147,7 +235,6 @@ def generate_effects_report(pptx_path: str) -> str:
     return format_effects_report(transitions, animations)
     
 def get_system_fonts() -> Set[str]:
-    import matplotlib.font_manager as fm
     font_list: List[str] = fm.findSystemFonts(fontpaths=None)
     font_names: List[str] = []
     
@@ -162,12 +249,14 @@ def get_system_fonts() -> Set[str]:
 
     return sorted(set(font_names))
 
-def analyze_paragraph_fonts(paragraph: _Paragraph) -> Dict[str, bool]:
+def analyze_paragraph_fonts(paragraph: _Paragraph) -> Dict[str, Dict[str, Any]]:
     """
     Extract fonts from a paragraph, including runs.
     
     Returns:
-        Dict mapping font names to whether they contain visible text (True) or only whitespace (False)
+        Dict mapping font names to info containing:
+        - has_visible_text: Whether the font contains visible text (True) or only whitespace (False)
+        - sizes: Set of font sizes used with visible text
     """
     fonts = {}
 
@@ -178,23 +267,41 @@ def analyze_paragraph_fonts(paragraph: _Paragraph) -> Dict[str, bool]:
                 # Check if this run contains non-whitespace characters
                 has_visible_text = bool(run.text.strip())
                 
-                # If font already exists in our map and previously had visible text, keep it that way
-                if font_name in fonts:
-                    fonts[font_name] = fonts[font_name] or has_visible_text
-                else:
-                    fonts[font_name] = has_visible_text
+                # Get font size if available
+                font_size = None
+                if hasattr(run.font, 'size') and run.font.size is not None:
+                    # Convert from EMUs to points (1 point = 12700 EMUs)
+                    if isinstance(run.font.size, int):
+                        font_size = round(run.font.size / 12700, 1)
+                
+                # Initialize font info if not already in dictionary
+                if font_name not in fonts:
+                    fonts[font_name] = {
+                        "has_visible_text": False,
+                        "sizes": set()
+                    }
+                
+                # Update visibility status
+                if has_visible_text:
+                    fonts[font_name]["has_visible_text"] = True
+                    
+                    # Only track size if it's available and this run has visible text
+                    if font_size is not None:
+                        fonts[font_name]["sizes"].add(font_size)
 
         except Exception as e:
             logger.debug(f"Error analyzing run: {str(e)}")
 
     return fonts
 
-def analyze_shape_fonts(shape: BaseShape) -> Dict[str, bool]:
+def analyze_shape_fonts(shape: BaseShape) -> Dict[str, Dict[str, Any]]:
     """
-    Safely extract fonts from a shape, tracking whether each font has visible text.
+    Safely extract fonts from a shape, tracking whether each font has visible text and its sizes.
     
     Returns:
-        Dict mapping font names to whether they contain visible text (True) or only whitespace (False)
+        Dict mapping font names to info containing:
+        - has_visible_text: Whether the font contains visible text (True) or only whitespace (False)
+        - sizes: Set of font sizes used with visible text
     """
     fonts = {}
     
@@ -203,12 +310,20 @@ def analyze_shape_fonts(shape: BaseShape) -> Dict[str, bool]:
         if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
             for paragraph in shape.text_frame.paragraphs:
                 paragraph_fonts = analyze_paragraph_fonts(paragraph)
-                # Merge results, keeping track of visible text status
-                for font_name, has_visible_text in paragraph_fonts.items():
-                    if font_name in fonts:
-                        fonts[font_name] = fonts[font_name] or has_visible_text
-                    else:
-                        fonts[font_name] = has_visible_text
+                # Merge results, keeping track of visible text status and sizes
+                for font_name, font_info in paragraph_fonts.items():
+                    if font_name not in fonts:
+                        fonts[font_name] = {
+                            "has_visible_text": False,
+                            "sizes": set()
+                        }
+                    
+                    # Update visibility
+                    fonts[font_name]["has_visible_text"] = fonts[font_name]["has_visible_text"] or font_info["has_visible_text"]
+                    
+                    # Add sizes if this font has visible text
+                    if font_info["has_visible_text"]:
+                        fonts[font_name]["sizes"].update(font_info["sizes"])
                 
         # Handle tables
         if hasattr(shape, 'has_table') and shape.has_table:
@@ -216,30 +331,38 @@ def analyze_shape_fonts(shape: BaseShape) -> Dict[str, bool]:
                 for cell in row.cells:
                     for paragraph in cell.text_frame.paragraphs:
                         paragraph_fonts = analyze_paragraph_fonts(paragraph)
-                        # Merge results, keeping track of visible text status
-                        for font_name, has_visible_text in paragraph_fonts.items():
-                            if font_name in fonts:
-                                fonts[font_name] = fonts[font_name] or has_visible_text
-                            else:
-                                fonts[font_name] = has_visible_text
+                        # Merge results, keeping track of visible text status and sizes
+                        for font_name, font_info in paragraph_fonts.items():
+                            if font_name not in fonts:
+                                fonts[font_name] = {
+                                    "has_visible_text": False,
+                                    "sizes": set()
+                                }
+                            
+                            # Update visibility
+                            fonts[font_name]["has_visible_text"] = fonts[font_name]["has_visible_text"] or font_info["has_visible_text"]
+                            
+                            # Add sizes if this font has visible text
+                            if font_info["has_visible_text"]:
+                                fonts[font_name]["sizes"].update(font_info["sizes"])
                         
     except Exception as e:
         logger.debug(f"Error analyzing shape: {str(e)}")
         
     return fonts
 
-def analyze_fonts(pptx_path: str) -> Tuple[Dict[int, Dict[str, Dict[str, bool]]], Dict[str, bool]]:
+def analyze_fonts(pptx_path: str) -> Tuple[Dict[int, Dict[str, Dict[str, Any]]], Dict[str, Dict[str, Any]]]:
     """
     Analyze fonts used in a PowerPoint presentation.
     
     Returns:
         Tuple containing:
         - Dictionary mapping slide numbers to shape types to font usage info
-        - Dictionary mapping all fonts to whether they have visible text in the presentation
+        - Dictionary mapping all fonts to their visibility and size information
     """
     prs = Presentation(pptx_path)
     font_usage = defaultdict(lambda: defaultdict(dict))
-    all_fonts_visibility = {}
+    all_fonts_info = {}
     
     for slide_num, slide in enumerate(prs.slides, start=1):
         try:
@@ -251,12 +374,22 @@ def analyze_fonts(pptx_path: str) -> Tuple[Dict[int, Dict[str, Dict[str, bool]]]
                     if fonts:
                         font_usage[slide_num][shape_type] = fonts
                         
-                        # Update global font visibility tracking
-                        for font_name, has_visible_text in fonts.items():
-                            if font_name in all_fonts_visibility:
-                                all_fonts_visibility[font_name] = all_fonts_visibility[font_name] or has_visible_text
-                            else:
-                                all_fonts_visibility[font_name] = has_visible_text
+                        # Update global font tracking
+                        for font_name, font_info in fonts.items():
+                            if font_name not in all_fonts_info:
+                                all_fonts_info[font_name] = {
+                                    "has_visible_text": False,
+                                    "sizes": set()
+                                }
+                            
+                            # Update visibility
+                            all_fonts_info[font_name]["has_visible_text"] = (
+                                all_fonts_info[font_name]["has_visible_text"] or font_info["has_visible_text"]
+                            )
+                            
+                            # Add sizes if this font has visible text
+                            if font_info["has_visible_text"]:
+                                all_fonts_info[font_name]["sizes"].update(font_info["sizes"])
                         
                 except Exception as e:
                     logger.debug(f"Error processing shape in slide {slide_num}: {str(e)}")
@@ -266,7 +399,7 @@ def analyze_fonts(pptx_path: str) -> Tuple[Dict[int, Dict[str, Dict[str, bool]]]
             logger.warning(f"Error processing slide {slide_num}: {str(e)}")
             continue
 
-    return font_usage, all_fonts_visibility
+    return font_usage, all_fonts_info
 
 def is_internal_font(font_name: str) -> bool:
     if not font_name:
@@ -354,8 +487,8 @@ def extract_theme_fonts(presentation: Any) -> Dict[str, Any]:
     
     return theme_fonts
 
-def format_font_report(font_usage: Dict[int, Dict[str, Dict[str, bool]]], 
-                     all_fonts_visibility: Dict[str, bool],
+def format_font_report(font_usage: Dict[int, Dict[str, Dict[str, Any]]], 
+                     all_fonts_info: Dict[str, Dict[str, Any]],
                      system_fonts: Set[str],
                      presentation: Any) -> str:
     """Create a formatted report showing font usage and theme fonts."""
@@ -380,34 +513,49 @@ th {
     color: #888;
     font-style: italic;
 }
+.sizes {
+    font-size: 0.9em;
+    color: #444;
+}
 </style>
 """
 
     # Filter out internal fonts
-    all_fonts_visibility = {f.strip(): v for f, v in all_fonts_visibility.items() if not is_internal_font(f)}
+    all_fonts_info = {f.strip(): v for f, v in all_fonts_info.items() if not is_internal_font(f)}
     
     system_fonts = {s.lower().strip() for s in system_fonts}
     
     # Create a mapping of fonts to the slides that use them, with visibility information
-    font_to_slides: Dict[str, Dict[int, bool]] = {}
+    font_to_slides: Dict[str, Dict[int, Dict[str, Any]]] = {}
     for slide_num, shapes in font_usage.items():
         # Process all fonts from all shapes in this slide
         for shape_type, fonts_info in shapes.items():
-            for font, has_visible_text in fonts_info.items():
+            for font, font_info in fonts_info.items():
                 if font and not is_internal_font(font):
                     if font not in font_to_slides:
                         font_to_slides[font] = {}
-                    # Store whether this font has visible text on this slide
-                    if slide_num in font_to_slides[font]:
-                        font_to_slides[font][slide_num] = font_to_slides[font][slide_num] or has_visible_text
-                    else:
-                        font_to_slides[font][slide_num] = has_visible_text
+                    
+                    # Store font info for this slide
+                    if slide_num not in font_to_slides[font]:
+                        font_to_slides[font][slide_num] = {
+                            "has_visible_text": False,
+                            "sizes": set()
+                        }
+                    
+                    # Update visibility for this slide
+                    font_to_slides[font][slide_num]["has_visible_text"] = (
+                        font_to_slides[font][slide_num]["has_visible_text"] or font_info["has_visible_text"]
+                    )
+                    
+                    # Add sizes if this font has visible text on this slide
+                    if font_info["has_visible_text"]:
+                        font_to_slides[font][slide_num]["sizes"].update(font_info["sizes"])
 
-    result += "## Regular Font Usage\n"
+    result += "## Custom Font Usage\n"
     
     if font_to_slides:
         result += "<table>\n"
-        result += "<tr><th>Font Name</th><th>Status</th><th>Used on Slides</th><th>Notes</th></tr>\n"
+        result += "<tr><th>Font Name</th><th>Status</th><th>Used on Slides</th><th>Font Sizes</th><th>Notes</th></tr>\n"
         
         for font in sorted(font_to_slides.keys()):
             if font:  # Skip None values
@@ -417,29 +565,39 @@ th {
                 slides_info = sorted(font_to_slides[font].items())
                 slide_parts = []
                 
-                for slide_num, has_visible_text in slides_info:
-                    if has_visible_text:
+                # Track all sizes for this font
+                all_sizes = set()
+                
+                for slide_num, info in slides_info:
+                    if info["has_visible_text"]:
                         slide_parts.append(str(slide_num))
+                        # Collect sizes from visible text
+                        all_sizes.update(info["sizes"])
                     else:
                         slide_parts.append(f"<span class='whitespace-only'>{slide_num}*</span>")
                 
                 slides_str = ", ".join(slide_parts)
                 
+                # Format sizes as a sorted list
+                sizes_str = ""
+                if all_sizes:
+                    sizes_str = ", ".join(f"{size}pt" for size in sorted(all_sizes))
+                
                 # Determine if this font is only used for whitespace across all slides
-                whitespace_only = not any(has_visible_text for _, has_visible_text in slides_info)
+                whitespace_only = not any(info["has_visible_text"] for _, info in slides_info)
                 
                 # Add note about whitespace usage
                 notes = ""
                 if whitespace_only:
                     notes = "<span class='whitespace-only'>Used only for whitespace</span>"
-                elif any(not has_visible_text for _, has_visible_text in slides_info):
+                elif any(not info["has_visible_text"] for _, info in slides_info):
                     notes = "<span class='whitespace-only'>* = whitespace only on marked slides</span>"
                 
-                result += f"<tr><td>{font}</td><td>{status}</td><td>{slides_str}</td><td>{notes}</td></tr>\n"
+                result += f"<tr><td>{font}</td><td>{status}</td><td>{slides_str}</td><td class='sizes'>{sizes_str}</td><td>{notes}</td></tr>\n"
         
         result += "</table>\n"
     else:
-        result += "(no regular fonts used in presentation)\n"
+        result += "(no custom fonts used in presentation)\n"
     
     # Print theme fonts
     result += "\n## Theme Fonts\n"
@@ -482,7 +640,7 @@ th {
     # Count whitespace-only fonts
     whitespace_only_fonts = sum(
         1 for font in font_to_slides 
-        if not any(has_visible_text for _, has_visible_text in font_to_slides[font].items())
+        if not any(info["has_visible_text"] for _, info in font_to_slides[font].items())
     )
     
     total_theme_fonts = sum(
@@ -494,9 +652,9 @@ th {
         for fonts in [theme_fonts.get("major_fonts", {}), theme_fonts.get("minor_fonts", {})]
     )
     
-    result += "\n## Summary\n"
-    result += f"Total regular fonts: {total_fonts}<br />\n"
-    result += f"Missing regular fonts: {missing_fonts}<br />\n"
+    result += "\n## Fonts Summary\n"
+    result += f"Total custom fonts: {total_fonts}<br />\n"
+    result += f"Missing custom fonts: {missing_fonts}<br />\n"
     result += f"Fonts used only for whitespace: {whitespace_only_fonts}<br />\n"
     result += f"Total theme fonts: {total_theme_fonts}<br />\n"
     result += f"Missing theme fonts: {missing_theme_fonts}\n"
@@ -512,10 +670,10 @@ def generate_font_report(pptx_path: str) -> str:
     prs = Presentation(pptx_path)
     
     # Analyze presentation
-    font_usage, all_fonts_visibility = analyze_fonts(pptx_path)
+    font_usage, all_fonts_info = analyze_fonts(pptx_path)
     
     # Format report
-    return format_font_report(font_usage, all_fonts_visibility, system_fonts, prs)
+    return format_font_report(font_usage, all_fonts_info, system_fonts, prs)
 
 class PowerPointAnalyzerGUI(QMainWindow):
     def __init__(self):
@@ -541,12 +699,15 @@ class PowerPointAnalyzerGUI(QMainWindow):
         # Analysis options
         options_group = QGroupBox("Analysis Options")
         options_layout = QHBoxLayout()
+        self.summary_check = QCheckBox("Summary")
         self.hidden_check = QCheckBox("Hidden Slides")
         self.effects_check = QCheckBox("Effects")
         self.fonts_check = QCheckBox("Fonts")
+        self.summary_check.setChecked(True)
         self.hidden_check.setChecked(True)
         self.effects_check.setChecked(True)
         self.fonts_check.setChecked(True)
+        options_layout.addWidget(self.summary_check)
         options_layout.addWidget(self.hidden_check)
         options_layout.addWidget(self.effects_check)
         options_layout.addWidget(self.fonts_check)
@@ -596,6 +757,12 @@ class PowerPointAnalyzerGUI(QMainWindow):
         try:
             # Capture output
             output = ""
+            
+            # Include the presentation summary first if selected
+            if self.summary_check.isChecked():
+                output += generate_presentation_summary(file_path)
+            
+            # Add other selected analysis sections
             if self.hidden_check.isChecked():
                 output += generate_hidden_slides_report(file_path)
             if self.effects_check.isChecked():
