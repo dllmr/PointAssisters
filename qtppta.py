@@ -755,7 +755,10 @@ th {
     result += "\n## Fonts Summary\n"
     result += f"Total custom fonts: {total_fonts}<br />\n"
     result += f"Missing custom fonts: {missing_fonts}<br />\n"
-    result += f"Fonts used only for whitespace: {whitespace_only_fonts}<br />\n"
+    
+    # Only show whitespace-only fonts line if there are any
+    if whitespace_only_fonts > 0:
+        result += f"Fonts used only for whitespace: {whitespace_only_fonts}<br />\n"
     
     if unknown_fonts > 0:
         slide_list = ", ".join(str(num) for num in sorted(slides_with_unknown_fonts))
