@@ -20,7 +20,7 @@ from pptx.shapes.base import BaseShape
 from pptx.text.text import _Paragraph
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QPushButton, QFileDialog, QLineEdit, 
-                            QTextEdit, QCheckBox, QGroupBox, QStatusBar)
+                            QTextEdit, QCheckBox, QGroupBox, QStatusBar, QLabel)
 from typing import Dict, List, Set, Tuple, Any
 from xml.etree import ElementTree
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
@@ -134,7 +134,10 @@ def generate_presentation_summary(pptx_path: str) -> str:
     """Generate a summary section with general presentation statistics."""
     stats = analyze_presentation_statistics(pptx_path)
     
-    result = "## Presentation Summary\n"
+    # Get just the filename without the full path
+    filename = Path(pptx_path).name
+    
+    result = f"## Presentation Summary for {filename}\n"
     
     # Basic stats
     result += f"Total slides: {stats['total_slides']}<br />\n"
@@ -259,20 +262,26 @@ def analyze_paragraph_fonts(paragraph: _Paragraph) -> Dict[str, Dict[str, Any]]:
         - sizes: Set of font sizes used with visible text
     """
     fonts = {}
+    
+    # Track runs with missing font information but with size/text data
+    unknown_sizes = set()
+    has_unknown_visible_text = False
 
     for run in paragraph.runs:
         try:
+            # Check if this run contains non-whitespace characters
+            has_visible_text = bool(run.text.strip())
+            
+            # Get font size if available
+            font_size = None
+            if hasattr(run.font, 'size') and run.font.size is not None:
+                # Convert from EMUs to points (1 point = 12700 EMUs)
+                if isinstance(run.font.size, int):
+                    font_size = int(round(run.font.size / 12700))
+            
             if hasattr(run, 'font') and run.font.name and not is_internal_font(run.font.name):
+                # Process normal font with name
                 font_name = run.font.name
-                # Check if this run contains non-whitespace characters
-                has_visible_text = bool(run.text.strip())
-                
-                # Get font size if available
-                font_size = None
-                if hasattr(run.font, 'size') and run.font.size is not None:
-                    # Convert from EMUs to points (1 point = 12700 EMUs)
-                    if isinstance(run.font.size, int):
-                        font_size = round(run.font.size / 12700, 1)
                 
                 # Initialize font info if not already in dictionary
                 if font_name not in fonts:
@@ -288,9 +297,21 @@ def analyze_paragraph_fonts(paragraph: _Paragraph) -> Dict[str, Dict[str, Any]]:
                     # Only track size if it's available and this run has visible text
                     if font_size is not None:
                         fonts[font_name]["sizes"].add(font_size)
+            elif has_visible_text or font_size:
+                # Track that we have text/size but no font info
+                has_unknown_visible_text = has_unknown_visible_text or has_visible_text
+                if font_size is not None and has_visible_text:
+                    unknown_sizes.add(font_size)
 
         except Exception as e:
             logger.debug(f"Error analyzing run: {str(e)}")
+    
+    # Add unknown font entry if we found runs with missing font information
+    if has_unknown_visible_text or unknown_sizes:
+        fonts["(unknown)"] = {
+            "has_visible_text": has_unknown_visible_text,
+            "sizes": unknown_sizes
+        }
 
     return fonts
 
@@ -490,7 +511,8 @@ def extract_theme_fonts(presentation: Any) -> Dict[str, Any]:
 def format_font_report(font_usage: Dict[int, Dict[str, Dict[str, Any]]], 
                      all_fonts_info: Dict[str, Dict[str, Any]],
                      system_fonts: Set[str],
-                     presentation: Any) -> str:
+                     presentation: Any,
+                     font_size_threshold: int = 24) -> str:
     """Create a formatted report showing font usage and theme fonts."""
     result = ""
 
@@ -504,18 +526,23 @@ table {
 th, td {
     padding: 8px 16px;
     text-align: left;
-    border: 1px solid #666;
+    border: 1px solid gray;
 }
 th {
     font-weight: bold;
 }
 .whitespace-only {
-    color: #888;
     font-style: italic;
 }
-.sizes {
-    font-size: 0.9em;
-    color: #444;
+.small-font {
+    font-weight: bold;
+}
+.unknown-font {
+    font-style: italic;
+}
+.unknown-small-font {
+    font-weight: bold;
+    font-style: italic;
 }
 </style>
 """
@@ -557,43 +584,91 @@ th {
         result += "<table>\n"
         result += "<tr><th>Font Name</th><th>Status</th><th>Used on Slides</th><th>Font Sizes</th><th>Notes</th></tr>\n"
         
-        for font in sorted(font_to_slides.keys()):
-            if font:  # Skip None values
+        # Process fonts by moving unknown to the end but otherwise alphabetical
+        sorted_fonts = sorted(
+            font_to_slides.keys(), 
+            key=lambda x: (x == "(unknown)", x.lower())
+        )
+        
+        for font in sorted_fonts:
+            if not font:  # Skip None values
+                continue
+                
+            # Special handling for unknown fonts
+            is_unknown = font == "(unknown)"
+            font_name_display = f"<span class='unknown-font'>{font}</span>" if is_unknown else font
+            
+            # Determine font status
+            if is_unknown:
+                status = "<span class='unknown-font'>Unknown (theme/default font)</span>"
+            else:
                 status = "✅ Installed" if font.lower() in system_fonts else "❌ Missing"
                 
-                # Convert slide numbers to a readable string, marking whitespace-only slides
-                slides_info = sorted(font_to_slides[font].items())
-                slide_parts = []
-                
-                # Track all sizes for this font
-                all_sizes = set()
-                
-                for slide_num, info in slides_info:
-                    if info["has_visible_text"]:
-                        slide_parts.append(str(slide_num))
-                        # Collect sizes from visible text
-                        all_sizes.update(info["sizes"])
+            # Convert slide numbers to a readable string, marking whitespace-only slides
+            slides_info = sorted(font_to_slides[font].items())
+            slide_parts = []
+            
+            # Track all sizes for this font
+            all_sizes = set()
+            
+            # Track slides with small fonts (below threshold)
+            small_font_slides = set()
+            
+            for slide_num, info in slides_info:
+                if info["has_visible_text"]:
+                    # Check for small fonts on this slide
+                    has_small_font = any(size < font_size_threshold for size in info["sizes"])
+                    
+                    if has_small_font:
+                        small_font_slides.add(slide_num)
+                        slide_parts.append(f"<span class='small-font'>{slide_num}†</span>")
                     else:
-                        slide_parts.append(f"<span class='whitespace-only'>{slide_num}*</span>")
-                
-                slides_str = ", ".join(slide_parts)
-                
-                # Format sizes as a sorted list
-                sizes_str = ""
-                if all_sizes:
-                    sizes_str = ", ".join(f"{size}pt" for size in sorted(all_sizes))
-                
-                # Determine if this font is only used for whitespace across all slides
-                whitespace_only = not any(info["has_visible_text"] for _, info in slides_info)
-                
-                # Add note about whitespace usage
-                notes = ""
-                if whitespace_only:
-                    notes = "<span class='whitespace-only'>Used only for whitespace</span>"
-                elif any(not info["has_visible_text"] for _, info in slides_info):
-                    notes = "<span class='whitespace-only'>* = whitespace only on marked slides</span>"
-                
-                result += f"<tr><td>{font}</td><td>{status}</td><td>{slides_str}</td><td class='sizes'>{sizes_str}</td><td>{notes}</td></tr>\n"
+                        slide_parts.append(str(slide_num))
+                        
+                    # Collect sizes from visible text
+                    all_sizes.update(info["sizes"])
+                else:
+                    slide_parts.append(f"<span class='whitespace-only'>{slide_num}*</span>")
+            
+            slides_str = ", ".join(slide_parts)
+            
+            # Format sizes as a sorted list
+            sizes_str = ""
+            if all_sizes:
+                # Sort sizes and highlight those below threshold
+                size_parts = []
+                for size in sorted(all_sizes):
+                    if size < font_size_threshold:
+                        # Use combined style for unknown small fonts
+                        if is_unknown:
+                            size_parts.append(f"<span class='unknown-small-font'>{size}</span>")
+                        else:
+                            size_parts.append(f"<span class='small-font'>{size}</span>")
+                    else:
+                        if is_unknown:
+                            size_parts.append(f"<span class='unknown-font'>{size}</span>")
+                        else:
+                            size_parts.append(str(size))
+                sizes_str = ", ".join(size_parts)
+            
+            # Determine if this font is only used for whitespace across all slides
+            whitespace_only = not any(info["has_visible_text"] for _, info in slides_info)
+            
+            # Add notes about whitespace usage, small fonts, and unknown fonts
+            notes = []
+            if is_unknown:
+                notes.append("<span class='unknown-font'>Font information not available (likely theme or default font)</span>")
+            
+            if whitespace_only:
+                notes.append("<span class='whitespace-only'>Used only for whitespace</span>")
+            elif any(not info["has_visible_text"] for _, info in slides_info):
+                notes.append("<span class='whitespace-only'>* = whitespace only on marked slides</span>")
+            
+            if small_font_slides:
+                slides_list = ", ".join(str(slide) for slide in sorted(small_font_slides))
+                notes.append(f"<span class='small-font'>† = Small font (&lt;{font_size_threshold}pt) on slides {slides_list}</span>")
+            
+            result += f"<tr><td>{font_name_display}</td><td>{status}</td><td>{slides_str}</td><td>{sizes_str}</td><td>{' '.join(notes)}</td></tr>\n"
         
         result += "</table>\n"
     else:
@@ -634,14 +709,39 @@ th {
             result += "(no theme fonts defined)\n"
     
     # Print summary statistics
-    total_fonts = len(font_to_slides)
-    missing_fonts = sum(1 for font in font_to_slides if font.lower() not in system_fonts)
+    total_fonts = len([font for font in font_to_slides.keys() if font != "(unknown)"])
+    missing_fonts = sum(1 for font in font_to_slides if font != "(unknown)" and font.lower() not in system_fonts)
+    unknown_fonts = 1 if "(unknown)" in font_to_slides else 0
     
-    # Count whitespace-only fonts
+    # Count whitespace-only fonts (excluding unknown)
     whitespace_only_fonts = sum(
         1 for font in font_to_slides 
-        if not any(info["has_visible_text"] for _, info in font_to_slides[font].items())
+        if font != "(unknown)" and not any(info["has_visible_text"] for _, info in font_to_slides[font].items())
     )
+    
+    # Count fonts with sizes below threshold (excluding unknown)
+    small_fonts = sum(
+        1 for font in font_to_slides
+        if font != "(unknown)" and any(
+            any(size < font_size_threshold for size in info["sizes"])
+            for _, info in font_to_slides[font].items()
+            if info["has_visible_text"]  # Only consider visible text
+        )
+    )
+    
+    # Count slides with small fonts (including those from unknown fonts)
+    slides_with_small_fonts = set()
+    for font, slides_info in font_to_slides.items():
+        for slide_num, info in slides_info.items():
+            if info["has_visible_text"] and any(size < font_size_threshold for size in info["sizes"]):
+                slides_with_small_fonts.add(slide_num)
+    
+    # Count slides with unknown fonts
+    slides_with_unknown_fonts = set()
+    if "(unknown)" in font_to_slides:
+        for slide_num, info in font_to_slides["(unknown)"].items():
+            if info["has_visible_text"]:
+                slides_with_unknown_fonts.add(slide_num)
     
     total_theme_fonts = sum(
         len([f for f in fonts.values() if f]) 
@@ -656,13 +756,33 @@ th {
     result += f"Total custom fonts: {total_fonts}<br />\n"
     result += f"Missing custom fonts: {missing_fonts}<br />\n"
     result += f"Fonts used only for whitespace: {whitespace_only_fonts}<br />\n"
+    
+    if unknown_fonts > 0:
+        slide_list = ", ".join(str(num) for num in sorted(slides_with_unknown_fonts))
+        result += f"<span class='unknown-font'>Unknown fonts (theme/default): {unknown_fonts} (on slides {slide_list})</span><br />\n"
+    
+    if small_fonts > 0:
+        slide_list = ", ".join(str(num) for num in sorted(slides_with_small_fonts))
+        result += f"<span class='small-font'>Fonts below {font_size_threshold}pt: {small_fonts} (on slides {slide_list})</span><br />\n"
+    
+    # Add note about small font sizes in unknown fonts
+    unknown_small_fonts = False
+    if "(unknown)" in font_to_slides:
+        for _, info in font_to_slides["(unknown)"].items():
+            if info["has_visible_text"] and any(size < font_size_threshold for size in info["sizes"]):
+                unknown_small_fonts = True
+                break
+    
+    if unknown_small_fonts:
+        result += f"<span class='unknown-small-font'>Note: Small font sizes detected in unknown fonts</span><br />\n"
+    
     result += f"Total theme fonts: {total_theme_fonts}<br />\n"
     result += f"Missing theme fonts: {missing_theme_fonts}\n"
     result += "***\n"
 
     return result
 
-def generate_font_report(pptx_path: str) -> str:
+def generate_font_report(pptx_path: str, font_size_threshold: int) -> str:
     # Get system fonts
     system_fonts = get_system_fonts()
     
@@ -673,7 +793,7 @@ def generate_font_report(pptx_path: str) -> str:
     font_usage, all_fonts_info = analyze_fonts(pptx_path)
     
     # Format report
-    return format_font_report(font_usage, all_fonts_info, system_fonts, prs)
+    return format_font_report(font_usage, all_fonts_info, system_fonts, prs, font_size_threshold)
 
 class PowerPointAnalyzerGUI(QMainWindow):
     def __init__(self):
@@ -713,6 +833,19 @@ class PowerPointAnalyzerGUI(QMainWindow):
         options_layout.addWidget(self.fonts_check)
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
+        
+        # Font size threshold
+        threshold_layout = QHBoxLayout()
+        threshold_layout.addWidget(QWidget())  # Spacer
+        threshold_layout.addWidget(QLabel("Font Size Threshold:"))
+        self.threshold_entry = QLineEdit()
+        self.threshold_entry.setPlaceholderText("24")
+        self.threshold_entry.setMaximumWidth(50)
+        self.threshold_entry.setToolTip("Font sizes below this value will be flagged (default: 24)")
+        threshold_layout.addWidget(self.threshold_entry)
+        threshold_layout.addWidget(QLabel("points"))
+        threshold_layout.addStretch(1)  # Add stretch to push widgets to the left
+        layout.addLayout(threshold_layout)
 
         # Analyze button
         analyze_button = QPushButton("Analyze")
@@ -750,6 +883,14 @@ class PowerPointAnalyzerGUI(QMainWindow):
             self.status_bar.showMessage("Selected file does not exist")
             return
 
+        # Get font size threshold (default to 24 if not provided or invalid)
+        try:
+            font_size_threshold = int(self.threshold_entry.text())
+            if font_size_threshold <= 0:
+                font_size_threshold = 24
+        except (ValueError, TypeError):
+            font_size_threshold = 24
+
         self.results_text.clear()
         self.status_bar.showMessage("Analyzing...")
         QApplication.processEvents()  # Ensure UI updates
@@ -768,7 +909,7 @@ class PowerPointAnalyzerGUI(QMainWindow):
             if self.effects_check.isChecked():
                 output += generate_effects_report(file_path)
             if self.fonts_check.isChecked():
-                output += generate_font_report(file_path)
+                output += generate_font_report(file_path, font_size_threshold)
 
             # Display results
             html = markdown.markdown(output)
