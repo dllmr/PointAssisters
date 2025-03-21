@@ -582,7 +582,7 @@ th {
     
     if font_to_slides:
         result += "<table>\n"
-        result += "<tr><th>Font Name</th><th>Status</th><th>Used on Slides</th><th>Font Sizes</th><th>Notes</th></tr>\n"
+        result += "<tr><th>Font Name</th><th>Local Status</th><th>Used on Slides</th><th>Font Sizes</th><th>Notes</th></tr>\n"
         
         # Process fonts by moving unknown to the end but otherwise alphabetical
         sorted_fonts = sorted(
@@ -687,7 +687,7 @@ th {
             result += f"Theme scheme name: {theme_fonts['scheme_name']}\n\n"
         
         result += "<table>\n"
-        result += "<tr><th>Font Type</th><th>Font Name</th><th>Status</th></tr>\n"
+        result += "<tr><th>Font Type</th><th>Font Name</th><th>Local Status</th></tr>\n"
         
         # Process major fonts
         major_fonts = theme_fonts.get("major_fonts", {})
