@@ -923,7 +923,6 @@ class PowerPointAnalyzerGUI(QMainWindow):
         
         # Font size threshold
         threshold_layout = QHBoxLayout()
-        threshold_layout.addWidget(QWidget())  # Spacer
         threshold_layout.addWidget(QLabel("Font Size Threshold:"))
         self.threshold_entry = QLineEdit()
         self.threshold_entry.setPlaceholderText("24")
@@ -932,12 +931,14 @@ class PowerPointAnalyzerGUI(QMainWindow):
         threshold_layout.addWidget(self.threshold_entry)
         threshold_layout.addWidget(QLabel("points"))
         threshold_layout.addStretch(1)  # Add stretch to push widgets to the left
-        layout.addLayout(threshold_layout)
-
-        # Analyze button
+        
+        # Add analyze button to the same row as threshold settings
         analyze_button = QPushButton("Analyze")
         analyze_button.clicked.connect(self.analyze)
-        layout.addWidget(analyze_button)
+        analyze_button.setFixedWidth(browse_button.sizeHint().width())  # Make it the same width as browse button
+        threshold_layout.addWidget(analyze_button)
+        
+        layout.addLayout(threshold_layout)
 
         # Results area
         self.results_text = QTextEdit()
