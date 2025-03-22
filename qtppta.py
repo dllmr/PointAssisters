@@ -16,6 +16,7 @@ from collections import defaultdict
 from matplotlib import font_manager as fm
 from pathlib import Path
 from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.shapes.base import BaseShape
 from pptx.text.text import _Paragraph
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
@@ -238,18 +239,27 @@ def generate_effects_report(pptx_path: str) -> str:
     return format_effects_report(transitions, animations)
     
 def get_system_fonts() -> Set[str]:
-    font_list: List[str] = fm.findSystemFonts(fontpaths=None)
+    """
+    Get a set of all system fonts including both TTF and OTF formats.
+    
+    Returns:
+        A sorted set of font names available on the system.
+    """
     font_names: List[str] = []
     
-    for font in font_list:
+    fonts = fm.findSystemFonts(fontpaths=None)
+    
+    # Process each font file to get its name
+    for font in fonts:
         try:
             # Attempt to get the font properties
             font_name = fm.FontProperties(fname=font).get_name()
             font_names.append(font_name)
         except Exception as e:
-            # Optionally print the error message if you want to debug
+            # Log debug info about font loading errors
             logger.debug(f"Error loading font properties for {font}: {e}")
 
+    # Return sorted unique font names
     return sorted(set(font_names))
 
 def analyze_paragraph_fonts(paragraph: _Paragraph) -> Dict[str, Dict[str, Any]]:
@@ -366,6 +376,26 @@ def analyze_shape_fonts(shape: BaseShape) -> Dict[str, Dict[str, Any]]:
                             # Add sizes if this font has visible text
                             if font_info["has_visible_text"]:
                                 fonts[font_name]["sizes"].update(font_info["sizes"])
+        
+        # Handle group shapes - recursively process shapes within groups
+        if hasattr(shape, 'shape_type') and shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            if hasattr(shape, 'shapes'):
+                for child_shape in shape.shapes:
+                    child_fonts = analyze_shape_fonts(child_shape)
+                    # Merge results
+                    for font_name, font_info in child_fonts.items():
+                        if font_name not in fonts:
+                            fonts[font_name] = {
+                                "has_visible_text": False,
+                                "sizes": set()
+                            }
+                        
+                        # Update visibility
+                        fonts[font_name]["has_visible_text"] = fonts[font_name]["has_visible_text"] or font_info["has_visible_text"]
+                        
+                        # Add sizes if this font has visible text
+                        if font_info["has_visible_text"]:
+                            fonts[font_name]["sizes"].update(font_info["sizes"])
                         
     except Exception as e:
         logger.debug(f"Error analyzing shape: {str(e)}")
@@ -550,7 +580,15 @@ th {
     # Filter out internal fonts
     all_fonts_info = {f.strip(): v for f, v in all_fonts_info.items() if not is_internal_font(f)}
     
-    system_fonts = {s.lower().strip() for s in system_fonts}
+    # Create a normalized version of system fonts for flexible matching
+    system_fonts_lower = {s.lower().strip() for s in system_fonts}
+    
+    # Create a mapping with normalized versions (no spaces, no punctuation)
+    normalized_system_fonts = {}
+    for font in system_fonts:
+        # Create normalized version (lowercase, no spaces, no punctuation)
+        normalized = ''.join(c.lower() for c in font if c.isalnum())
+        normalized_system_fonts[normalized] = font
     
     # Create a mapping of fonts to the slides that use them, with visibility information
     font_to_slides: Dict[str, Dict[int, Dict[str, Any]]] = {}
@@ -598,11 +636,21 @@ th {
             is_unknown = font == "(unknown)"
             font_name_display = f"<span class='unknown-font'>{font}</span>" if is_unknown else font
             
-            # Determine font status
+            # Determine font status with flexible matching
             if is_unknown:
                 status = "<span class='unknown-font'>Unknown (theme/default font)</span>"
             else:
-                status = "✅ Installed" if font.lower() in system_fonts else "❌ Missing"
+                # First try exact match
+                if font.lower() in system_fonts_lower:
+                    status = "✅ Installed"
+                else:
+                    # Try normalized matching (PowerPoint-like flexibility)
+                    font_normalized = ''.join(c.lower() for c in font if c.isalnum())
+                    if font_normalized in normalized_system_fonts:
+                        matched_font = normalized_system_fonts[font_normalized]
+                        status = f"✅ Installed (as '{matched_font}')"
+                    else:
+                        status = "❌ Missing"
                 
             # Convert slide numbers to a readable string, marking whitespace-only slides
             slides_info = sorted(font_to_slides[font].items())
@@ -693,14 +741,34 @@ th {
         major_fonts = theme_fonts.get("major_fonts", {})
         for script, font in major_fonts.items():
             if font:
-                status = "✅ Installed" if font.lower() in system_fonts else "❌ Missing"
+                # Use flexible font matching for theme fonts too
+                if font.lower() in system_fonts_lower:
+                    status = "✅ Installed"
+                else:
+                    # Try normalized matching
+                    font_normalized = ''.join(c.lower() for c in font if c.isalnum())
+                    if font_normalized in normalized_system_fonts:
+                        matched_font = normalized_system_fonts[font_normalized]
+                        status = f"✅ Installed (as '{matched_font}')"
+                    else:
+                        status = "❌ Missing"
                 result += f"<tr><td>Major {script.replace('_', ' ').title()}</td><td>{font}</td><td>{status}</td></tr>\n"
         
         # Process minor fonts
         minor_fonts = theme_fonts.get("minor_fonts", {})
         for script, font in minor_fonts.items():
             if font:
-                status = "✅ Installed" if font.lower() in system_fonts else "❌ Missing"
+                # Use flexible font matching for theme fonts too
+                if font.lower() in system_fonts_lower:
+                    status = "✅ Installed"
+                else:
+                    # Try normalized matching
+                    font_normalized = ''.join(c.lower() for c in font if c.isalnum())
+                    if font_normalized in normalized_system_fonts:
+                        matched_font = normalized_system_fonts[font_normalized]
+                        status = f"✅ Installed (as '{matched_font}')"
+                    else:
+                        status = "❌ Missing"
                 result += f"<tr><td>Minor {script.replace('_', ' ').title()}</td><td>{font}</td><td>{status}</td></tr>\n"
         
         result += "</table>\n"
@@ -710,7 +778,16 @@ th {
     
     # Print summary statistics
     total_fonts = len([font for font in font_to_slides.keys() if font != "(unknown)"])
-    missing_fonts = sum(1 for font in font_to_slides if font != "(unknown)" and font.lower() not in system_fonts)
+    
+    # Update missing fonts count to use normalized matching
+    missing_fonts = 0
+    for font in font_to_slides:
+        if font != "(unknown)":
+            font_lower = font.lower()
+            font_normalized = ''.join(c.lower() for c in font if c.isalnum())
+            if font_lower not in system_fonts_lower and font_normalized not in normalized_system_fonts:
+                missing_fonts += 1
+    
     unknown_fonts = 1 if "(unknown)" in font_to_slides else 0
     
     # Count whitespace-only fonts (excluding unknown)
@@ -743,14 +820,21 @@ th {
             if info["has_visible_text"]:
                 slides_with_unknown_fonts.add(slide_num)
     
+    # Update theme fonts count with flexible matching
     total_theme_fonts = sum(
         len([f for f in fonts.values() if f]) 
         for fonts in [theme_fonts.get("major_fonts", {}), theme_fonts.get("minor_fonts", {})]
     )
-    missing_theme_fonts = sum(
-        len([f for f in fonts.values() if f and f.lower() not in system_fonts])
-        for fonts in [theme_fonts.get("major_fonts", {}), theme_fonts.get("minor_fonts", {})]
-    )
+    
+    # Update missing theme fonts count with flexible matching
+    missing_theme_fonts = 0
+    for fonts_dict in [theme_fonts.get("major_fonts", {}), theme_fonts.get("minor_fonts", {})]:
+        for font in fonts_dict.values():
+            if font:
+                font_lower = font.lower()
+                font_normalized = ''.join(c.lower() for c in font if c.isalnum())
+                if font_lower not in system_fonts_lower and font_normalized not in normalized_system_fonts:
+                    missing_theme_fonts += 1
     
     result += "\n## Fonts Summary\n"
     result += f"Total custom fonts: {total_fonts}<br />\n"
