@@ -10,6 +10,7 @@ import json
 import sys
 from pathlib import Path
 from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 from typing import Any, Dict, List
 from xml.etree import ElementTree
 
@@ -546,6 +547,127 @@ def shape_to_dict(shape: Any) -> Dict[str, Any]:
             }
         except AttributeError:
             shape_dict["image"] = None
+
+    # Handle media (audio/video) if present - check multiple locations
+    # Audio/video can be in: MSO_SHAPE_TYPE.MEDIA shapes, <a:audioFile> elements, or timing XML
+    media_info = None
+
+    if hasattr(shape, '_element'):
+        ns = {
+            'p': 'http://schemas.openxmlformats.org/presentationml/2006/main',
+            'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+            'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+            'p14': 'http://schemas.microsoft.com/office/powerpoint/2010/main'
+        }
+
+        # Check for audio file reference (most common for audio)
+        audio_file = shape._element.find('.//a:audioFile', ns)
+        if audio_file is not None:
+            media_info = {
+                "is_media": True,
+                "media_type": "audio",
+                "media_name": None,
+                "media_format": None
+            }
+
+            try:
+                rId = audio_file.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}link') or \
+                      audio_file.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+                if rId:
+                    media_info["relationship_id"] = rId
+                    # Try to get the media part
+                    try:
+                        if hasattr(shape, 'part') and hasattr(shape.part, 'slide'):
+                            slide = shape.part.slide
+                            media_part = slide.part.related_part(rId)
+                            if hasattr(media_part, 'partname'):
+                                media_info["media_name"] = str(media_part.partname).split('/')[-1]
+                            if hasattr(media_part, 'content_type'):
+                                media_info["media_format"] = media_part.content_type
+                    except Exception as e:
+                        media_info["media_access_error"] = str(e)
+            except Exception as e:
+                media_info["parse_error"] = str(e)
+
+        # Check for p14:media element (PowerPoint 2010+ media)
+        if media_info is None:
+            p14_media = shape._element.find('.//p14:media', ns)
+            if p14_media is not None:
+                media_info = {
+                    "is_media": True,
+                    "media_type": "unknown",  # Could be audio or video
+                    "media_name": None,
+                    "media_format": None
+                }
+
+                try:
+                    rId = p14_media.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+                    if rId:
+                        media_info["relationship_id"] = rId
+                        try:
+                            if hasattr(shape, 'part') and hasattr(shape.part, 'slide'):
+                                slide = shape.part.slide
+                                media_part = slide.part.related_part(rId)
+                                if hasattr(media_part, 'partname'):
+                                    media_info["media_name"] = str(media_part.partname).split('/')[-1]
+                                    # Infer type from filename
+                                    if media_info["media_name"].lower().endswith(('.mp3', '.wav', '.m4a', '.wma')):
+                                        media_info["media_type"] = "audio"
+                                    elif media_info["media_name"].lower().endswith(('.mp4', '.avi', '.mov', '.wmv')):
+                                        media_info["media_type"] = "video"
+                                if hasattr(media_part, 'content_type'):
+                                    media_info["media_format"] = media_part.content_type
+                                    # Also infer from content type
+                                    if 'audio' in media_info["media_format"].lower():
+                                        media_info["media_type"] = "audio"
+                                    elif 'video' in media_info["media_format"].lower():
+                                        media_info["media_type"] = "video"
+                        except Exception as e:
+                            media_info["media_access_error"] = str(e)
+                except Exception as e:
+                    media_info["parse_error"] = str(e)
+
+        # Check for video file reference
+        if media_info is None:
+            video_file = shape._element.find('.//a:videoFile', ns)
+            if video_file is not None:
+                media_info = {
+                    "is_media": True,
+                    "media_type": "video",
+                    "media_name": None,
+                    "media_format": None
+                }
+
+                try:
+                    rId = video_file.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed') or \
+                          video_file.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}link')
+                    if rId:
+                        media_info["relationship_id"] = rId
+                        try:
+                            if hasattr(shape, 'part') and hasattr(shape.part, 'slide'):
+                                slide = shape.part.slide
+                                media_part = slide.part.related_part(rId)
+                                if hasattr(media_part, 'partname'):
+                                    media_info["media_name"] = str(media_part.partname).split('/')[-1]
+                                if hasattr(media_part, 'content_type'):
+                                    media_info["media_format"] = media_part.content_type
+                        except Exception as e:
+                            media_info["media_access_error"] = str(e)
+                except Exception as e:
+                    media_info["parse_error"] = str(e)
+
+    # Also check for MSO_SHAPE_TYPE.MEDIA (legacy/alternative storage)
+    if media_info is None and hasattr(shape, 'shape_type') and shape.shape_type == MSO_SHAPE_TYPE.MEDIA:
+        media_info = {
+            "is_media": True,
+            "media_type": "unknown",
+            "media_name": None,
+            "media_format": None,
+            "note": "Detected via MSO_SHAPE_TYPE.MEDIA"
+        }
+
+    if media_info is not None:
+        shape_dict["media"] = media_info
 
     # Add placeholder information if available
     if hasattr(shape, 'is_placeholder') and shape.is_placeholder:
