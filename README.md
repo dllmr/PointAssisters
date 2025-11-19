@@ -1,6 +1,6 @@
 # PointAssisters - PowerPoint Analyzer
 
-A suite of tools to analyze PowerPoint presentations (.pptx files) and report on:
+A suite of tools to analyze PowerPoint presentations (.pptx and .pptm files) and report on:
 - Hidden slides
 - Slides featuring animations and transitions
 - Embedded media (audio and video files)
@@ -39,6 +39,8 @@ It is recommended to install [uv](https://docs.astral.sh/uv/) for running these 
 **CLI Mode:**
 ```bash
 uv run ppta.py presentation.pptx
+# or
+uv run ppta.py presentation.pptm
 ```
 
 Displays beautifully formatted analysis results in the terminal using Rich markdown rendering.
@@ -62,6 +64,8 @@ Opens a Qt-based GUI where you can:
 
 ```bash
 uv run pptdump.py presentation.pptx
+# or
+uv run pptdump.py presentation.pptm
 ```
 
 Outputs detailed JSON structure of the entire presentation including all shapes, text runs, theme fonts, media files, and XML elements. Useful for debugging and detailed inspection.

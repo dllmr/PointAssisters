@@ -25,7 +25,6 @@ from pptx.text.text import _Paragraph
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QHBoxLayout, QPushButton, QFileDialog, QLineEdit,
                             QTextEdit, QCheckBox, QGroupBox, QStatusBar, QLabel)
-from typing import Dict, List, Set, Tuple, Any
 from xml.etree import ElementTree
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 
@@ -58,7 +57,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-def find_hidden_slides(pptx_path: str) -> List[int]:
+def find_hidden_slides(pptx_path: str) -> list[int]:
     prs = Presentation(pptx_path)
     hidden_slides = []
     
@@ -97,7 +96,7 @@ def count_words_in_shape(shape: BaseShape) -> int:
         
     return word_count
 
-def analyze_presentation_statistics(pptx_path: str) -> Dict[str, Any]:
+def analyze_presentation_statistics(pptx_path: str):
     """Analyze general statistics about the presentation."""
     prs = Presentation(pptx_path)
     stats = {
@@ -212,7 +211,7 @@ def generate_hidden_slides_report(pptx_path: str) -> str:
 
     return result
 
-def find_animations_and_transitions(pptx_path: str) -> Tuple[Set[int], Set[int]]:
+def find_animations_and_transitions(pptx_path: str) -> tuple[set[int], set[int]]:
     """
     Find slides containing transitions or animations in a PowerPoint presentation.
     
@@ -254,7 +253,7 @@ def find_animations_and_transitions(pptx_path: str) -> Tuple[Set[int], Set[int]]
             
     return slides_with_transitions, slides_with_animations
 
-def find_media(pptx_path: str) -> Tuple[Dict[int, List[str]], Dict[int, List[str]]]:
+def find_media(pptx_path: str) -> tuple[dict[int, list[str]], dict[int, list[str]]]:
     """
     Find slides containing audio or video media in a PowerPoint presentation.
 
@@ -448,9 +447,9 @@ def find_media(pptx_path: str) -> Tuple[Dict[int, List[str]], Dict[int, List[str
 
     return slides_with_audio, slides_with_video
 
-def format_effects_report(slides_with_transitions: Set[int], slides_with_animations: Set[int],
-                          slides_with_audio: Dict[int, List[str]] = None,
-                          slides_with_video: Dict[int, List[str]] = None) -> str:
+def format_effects_report(slides_with_transitions: set[int], slides_with_animations: set[int],
+                          slides_with_audio: dict[int, list[str]] = None,
+                          slides_with_video: dict[int, list[str]] = None) -> str:
     result = ""
 
     result += "## Transitions, Animations, and Media\n"
@@ -502,14 +501,14 @@ def generate_effects_report(pptx_path: str) -> str:
     audio, video = find_media(pptx_path)
     return format_effects_report(transitions, animations, audio, video)
     
-def get_system_fonts() -> Set[str]:
+def get_system_fonts() -> set[str]:
     """
     Get a set of all system fonts including both TTF and OTF formats.
     
     Returns:
         A sorted set of font names available on the system.
     """
-    font_names: List[str] = []
+    font_names: list[str] = []
     
     fonts = fm.findSystemFonts(fontpaths=None)
     
@@ -526,7 +525,7 @@ def get_system_fonts() -> Set[str]:
     # Return sorted unique font names
     return sorted(set(font_names))
 
-def analyze_paragraph_fonts(paragraph: _Paragraph) -> Dict[str, Dict[str, Any]]:
+def analyze_paragraph_fonts(paragraph: _Paragraph):
     """
     Extract fonts from a paragraph, including runs.
     
@@ -589,7 +588,7 @@ def analyze_paragraph_fonts(paragraph: _Paragraph) -> Dict[str, Dict[str, Any]]:
 
     return fonts
 
-def analyze_shape_fonts(shape: BaseShape) -> Dict[str, Dict[str, Any]]:
+def analyze_shape_fonts(shape: BaseShape):
     """
     Safely extract fonts from a shape, tracking whether each font has visible text and its sizes.
     
@@ -666,7 +665,7 @@ def analyze_shape_fonts(shape: BaseShape) -> Dict[str, Dict[str, Any]]:
         
     return fonts
 
-def analyze_fonts(pptx_path: str) -> Tuple[Dict[int, Dict[str, Dict[str, Any]]], Dict[str, Dict[str, Any]]]:
+def analyze_fonts(pptx_path: str):
     """
     Analyze fonts used in a PowerPoint presentation.
     
@@ -722,7 +721,7 @@ def is_internal_font(font_name: str) -> bool:
     font_name = font_name.lower()
     return any(font_name.startswith(marker) for marker in INTERNAL_FONT_MARKERS)
 
-def extract_theme_fonts(presentation: Any) -> Dict[str, Any]:
+def extract_theme_fonts(presentation: Presentation):
     """Extract theme font information from the presentation."""
     theme_fonts = {}
     
@@ -802,10 +801,10 @@ def extract_theme_fonts(presentation: Any) -> Dict[str, Any]:
     
     return theme_fonts
 
-def format_font_report(font_usage: Dict[int, Dict[str, Dict[str, Any]]], 
-                     all_fonts_info: Dict[str, Dict[str, Any]],
-                     system_fonts: Set[str],
-                     presentation: Any,
+def format_font_report(font_usage,
+                     all_fonts_info,
+                     system_fonts: set[str],
+                     presentation: Presentation,
                      font_size_threshold: int = 24) -> str:
     """Create a formatted report showing font usage and theme fonts."""
     result = ""
@@ -855,7 +854,7 @@ th {
         normalized_system_fonts[normalized] = font
     
     # Create a mapping of fonts to the slides that use them, with visibility information
-    font_to_slides: Dict[str, Dict[int, Dict[str, Any]]] = {}
+    font_to_slides = {}
     for slide_num, shapes in font_usage.items():
         # Process all fonts from all shapes in this slide
         for shape_type, fonts_info in shapes.items():
@@ -1218,7 +1217,7 @@ class PowerPointAnalyzerGUI(QMainWindow):
             self,
             "Select PowerPoint File",
             "",
-            "PowerPoint files (*.pptx);;All files (*.*)"
+            "PowerPoint files (*.pptx *.pptm);;All files (*.*)"
         )
         if filename:
             self.file_entry.setText(filename)
@@ -1311,7 +1310,7 @@ def main():
         description='PointAssisters - PowerPoint Presentation Analyzer',
         epilog='If no file is provided, the GUI will be launched.'
     )
-    parser.add_argument('file', nargs='?', help='PowerPoint file to analyze (.pptx)')
+    parser.add_argument('file', nargs='?', help='PowerPoint file to analyze (.pptx or .pptm)')
     parser.add_argument('--threshold', type=int, default=24,
                        help='Font size threshold in points (default: 24)')
     parser.add_argument('--debug', action='store_true',
@@ -1327,8 +1326,8 @@ def main():
             print(f"Error: File not found: {args.file}", file=sys.stderr)
             sys.exit(1)
 
-        if not file_path.suffix.lower() == '.pptx':
-            print(f"Error: File must be a .pptx file: {args.file}", file=sys.stderr)
+        if file_path.suffix.lower() not in ['.pptx', '.pptm']:
+            print(f"Error: File must be a .pptx or .pptm file: {args.file}", file=sys.stderr)
             sys.exit(1)
 
         cli_mode(str(file_path), args.threshold, args.debug)

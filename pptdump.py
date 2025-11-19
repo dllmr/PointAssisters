@@ -11,11 +11,10 @@ import sys
 from pathlib import Path
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
-from typing import Any, Dict, List
 from xml.etree import ElementTree
 
 
-def resolve_theme_font(shape: Any, theme_code: str) -> str:
+def resolve_theme_font(shape, theme_code: str) -> str:
     """Resolve theme font codes to actual font names."""
     try:
         if not theme_code:
@@ -119,7 +118,7 @@ def resolve_theme_font(shape: Any, theme_code: str) -> str:
     except Exception as e:
         return f"Error resolving theme code '{theme_code}': {str(e)}"
 
-def extract_theme_fonts(presentation: Any) -> Dict[str, Any]:
+def extract_theme_fonts(presentation: Presentation):
     """Extract theme font information from the presentation."""
     theme_fonts = {}
     
@@ -238,7 +237,7 @@ def extract_theme_fonts(presentation: Any) -> Dict[str, Any]:
     
     return theme_fonts
 
-def extract_font_details(font_elem: Any, ns: Dict[str, str]) -> Dict[str, Any]:
+def extract_font_details(font_elem, ns: dict[str, str]):
     """Extract detailed font information from a font element."""
     font_details = {}
     
@@ -293,7 +292,7 @@ def extract_font_details(font_elem: Any, ns: Dict[str, str]) -> Dict[str, Any]:
     
     return font_details
 
-def shape_to_dict(shape: Any) -> Dict[str, Any]:
+def shape_to_dict(shape):
     """Convert a shape object to a dictionary of its properties."""
     shape_dict = {
         "name": shape.name,
@@ -681,7 +680,7 @@ def shape_to_dict(shape: Any) -> Dict[str, Any]:
 
     return shape_dict
 
-def slide_to_dict(slide: Any, slide_index: int) -> Dict[str, Any]:
+def slide_to_dict(slide, slide_index: int):
     """Convert a slide object to a dictionary of its properties."""
     slide_dict = {
         "slide_number": slide_index + 1,
@@ -844,7 +843,7 @@ def slide_to_dict(slide: Any, slide_index: int) -> Dict[str, Any]:
 
     return slide_dict
 
-def extract_text_style_fonts(style_element: Any, ns: Dict[str, str], slide: Any) -> Dict[str, Any]:
+def extract_text_style_fonts(style_element, ns: dict[str, str], slide):
     """Extract font information from a text style element."""
     result = {}
     
@@ -933,7 +932,7 @@ def extract_text_style_fonts(style_element: Any, ns: Dict[str, str], slide: Any)
     
     return result
 
-def presentation_to_dict(pptx_path: Path) -> Dict[str, Any]:
+def presentation_to_dict(pptx_path: Path):
     """Convert entire presentation to a dictionary."""
     prs = Presentation(pptx_path)
 
@@ -979,8 +978,8 @@ def main():
         print(f"Error: File '{pptx_path}' does not exist")
         sys.exit(1)
 
-    if pptx_path.suffix.lower() != '.pptx':
-        print("Error: File must be a .pptx file")
+    if pptx_path.suffix.lower() not in ['.pptx', '.pptm']:
+        print("Error: File must be a .pptx or .pptm file")
         sys.exit(1)
 
     try:
